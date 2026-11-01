@@ -26,32 +26,47 @@ public class MinefEvents {
 
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Post event) {
-        MinecraftServer server = event.getServer();
-        long now = server.getTickCount();
-
-        if (startAtTick >= 0 && now >= startAtTick) {
-            startAtTick = -1;
-            MinefBot.Result result = MinefBot.start(server);
-            MinefMod.LOGGER.info("[Minef] {}", result.message().getString());
-            if (result.ok()) {
-                // даём боту пару секунд полностью зайти, потом выполняем стартовые команды
-                commandsAtTick = now + 40;
-            }
+        if (startAtTick < 0 && commandsAtTick < 0) {
+            return;
         }
+        // Исключение в обработчике тика роняет весь сервер (и тогда хостинг бесконечно его
+        // перезапускает) - поэтому всё внутри обёрнуто в try/catch, а состояние сбрасывается ДО вызова.
+        try {
+            MinecraftServer server = event.getServer();
+            long now = server.getTickCount();
 
-        if (commandsAtTick >= 0 && now >= commandsAtTick) {
-            commandsAtTick = -1;
-            for (String command : Config.STARTUP_COMMANDS.get()) {
-                String text = command.startsWith("/") ? command : "/" + command;
-                MinefBot.Result result = MinefBot.say(server, null, text);
-                MinefMod.LOGGER.info("[Minef] стартовая команда '{}': {}", text, result.message().getString());
+            if (startAtTick >= 0 && now >= startAtTick) {
+                startAtTick = -1;
+                MinefBot.Result result = MinefBot.start(server);
+                MinefMod.LOGGER.info("[Minef] {}", result.message().getString());
+                if (result.ok()) {
+                    // даём боту пару секунд полностью зайти, потом выполняем стартовые команды
+                    commandsAtTick = now + 40;
+                }
             }
+
+            if (commandsAtTick >= 0 && now >= commandsAtTick) {
+                commandsAtTick = -1;
+                for (String command : Config.STARTUP_COMMANDS.get()) {
+                    String text = command.startsWith("/") ? command : "/" + command;
+                    MinefBot.Result result = MinefBot.say(server, null, text);
+                    MinefMod.LOGGER.info("[Minef] стартовая команда '{}': {}", text, result.message().getString());
+                }
+            }
+        } catch (Throwable t) {
+            startAtTick = -1;
+            commandsAtTick = -1;
+            MinefMod.LOGGER.error("[Minef] Ошибка автозапуска (сервер продолжает работу)", t);
         }
     }
 
     @SubscribeEvent
     public static void onServerStopping(ServerStoppingEvent event) {
         // убираем бота заранее, чтобы его данные корректно сохранились при остановке
-        MinefBot.stop(event.getServer());
+        try {
+            MinefBot.stop(event.getServer());
+        } catch (Throwable t) {
+            MinefMod.LOGGER.error("[Minef] Ошибка при остановке бота", t);
+        }
     }
 }

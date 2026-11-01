@@ -2,6 +2,7 @@ package com.example.minef.bot;
 
 import java.util.function.Consumer;
 
+import com.example.minef.MinefMod;
 import com.mojang.authlib.GameProfile;
 
 import net.minecraft.server.MinecraftServer;
@@ -16,6 +17,7 @@ import net.minecraft.world.damagesource.DamageSource;
  */
 public class FakeServerPlayer extends ServerPlayer {
     private final Consumer<FakeServerPlayer> onDeath;
+    private boolean failed = false;
 
     public FakeServerPlayer(MinecraftServer server, ServerLevel level, GameProfile profile,
             Consumer<FakeServerPlayer> onDeath) {
@@ -35,6 +37,13 @@ public class FakeServerPlayer extends ServerPlayer {
             this.doTick();
         } catch (NullPointerException ignored) {
             // как в Carpet: не роняем сервер из-за фейк-игрока
+        } catch (RuntimeException e) {
+            // любая другая ошибка (например, из чужого мода): убираем бота, а не роняем сервер
+            if (!failed) {
+                failed = true;
+                MinefMod.LOGGER.error("[Minef] Ошибка в тике виртуального игрока, бот будет отключён", e);
+                this.onDeath.accept(this);
+            }
         }
     }
 

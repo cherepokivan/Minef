@@ -62,9 +62,18 @@ public final class MinefBot {
         FakeServerPlayer player = new FakeServerPlayer(server, level, profile, p -> server.execute(() -> remove(server, p)));
         FakeConnection connection = new FakeConnection(PacketFlow.SERVERBOUND, packet -> onPacket(server, player, packet));
 
-        server.getPlayerList().placeNewPlayer(connection, player,
-                new CommonListenerCookie(profile, 0, player.clientInformation(), false));
-        player.gameMode.changeGameModeForPlayer(GameType.SPECTATOR);
+        try {
+            server.getPlayerList().placeNewPlayer(connection, player,
+                    new CommonListenerCookie(profile, 0, player.clientInformation(), false));
+            player.gameMode.changeGameModeForPlayer(GameType.SPECTATOR);
+        } catch (Throwable t) {
+            // Любая ошибка (в том числе из чужих модов, обрабатывающих вход игрока) не должна
+            // оставлять на сервере "полуживого" бота и не должна ронять сервер.
+            MinefMod.LOGGER.error("[Minef] Не удалось запустить виртуального игрока", t);
+            cleanupFailedStart(server, player);
+            bot = null;
+            return Result.failure("Ошибка запуска: " + t + " (полный стектрейс в latest.log)");
+        }
 
         bot = player;
         MinefMod.LOGGER.info("[Minef] Виртуальный игрок {} запущен.", name);
@@ -97,14 +106,32 @@ public final class MinefBot {
         lastIssuer = issuer;
         forwardUntilTick = server.getTickCount() + FORWARD_WINDOW_TICKS;
 
-        if (text.startsWith("/")) {
-            CommandSourceStack source = bot.createCommandSourceStack().withPermission(Config.COMMAND_PERMISSION_LEVEL.get());
-            server.getCommands().performPrefixedCommand(source, text);
-            return Result.success("Команда выполнена от имени бота: " + text);
-        }
+        try {
+            if (text.startsWith("/")) {
+                CommandSourceStack source = bot.createCommandSourceStack().withPermission(Config.COMMAND_PERMISSION_LEVEL.get());
+                server.getCommands().performPrefixedCommand(source, text);
+                return Result.success("Команда выполнена от имени бота: " + text);
+            }
 
-        server.getPlayerList().broadcastChatMessage(PlayerChatMessage.system(text), bot, ChatType.bind(ChatType.CHAT, bot));
-        return Result.success("Сообщение отправлено от имени бота.");
+            server.getPlayerList().broadcastChatMessage(PlayerChatMessage.system(text), bot, ChatType.bind(ChatType.CHAT, bot));
+            return Result.success("Сообщение отправлено от имени бота.");
+        } catch (Throwable t) {
+            MinefMod.LOGGER.error("[Minef] Ошибка при выполнении say", t);
+            return Result.failure("Ошибка: " + t + " (стектрейс в latest.log)");
+        }
+    }
+
+    /** Убирает следы неудачного запуска, чтобы на сервере не осталось полуживого игрока. */
+    private static void cleanupFailedStart(MinecraftServer server, FakeServerPlayer player) {
+        try {
+            if (server.getPlayerList().getPlayer(player.getUUID()) == player) {
+                player.connection.onDisconnect(new DisconnectionDetails(Component.literal("Minef: ошибка запуска")));
+            } else if (!player.isRemoved()) {
+                player.serverLevel().removePlayerImmediately(player, net.minecraft.world.entity.Entity.RemovalReason.DISCARDED);
+            }
+        } catch (Throwable ignored) {
+            // уборка по мере возможности
+        }
     }
 
     /** Убирает бота с сервера (как обычное отключение игрока: сохраняет данные). */
